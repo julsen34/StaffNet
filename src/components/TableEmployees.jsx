@@ -189,7 +189,7 @@ const TableEmployees = ({
         } else if (key === "estado") {
             column.width = 95;
         } else if (
-            ["fecha_nacimiento", "fecha_expedicion", "fecha_afiliacion_eps", "fecha_nombramiento", "fecha_ingreso", "fecha_aplica_teletrabajo", "fecha_retiro"].includes(
+            ["fecha_nacimiento", "fecha_expedicion", "fecha_afiliacion_eps", "fecha_nombramiento", "fecha_ingreso", "fecha_aplica_teletrabajo", "fecha_retiro", "fecha_fin_contrato"].includes(
                 key
             )
         ) {
@@ -488,6 +488,7 @@ const TableEmployees = ({
                         "fecha_aplica_teletrabajo",
                         "fecha_afiliacion_eps",
                         "fecha_nombramiento",
+                        "fecha_fin_contrato",
                     ].includes(key)
                 ) {
                     // Format the date property

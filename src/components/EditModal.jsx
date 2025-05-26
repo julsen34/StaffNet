@@ -365,6 +365,9 @@ const EditModal = ({
                                                         />
                                                     );
                                                 }
+                                                if (input.name === "fecha_fin_contrato" && inputValues.tipo_contrato !== "TERMINO FIJO") {
+                                                    return null;
+                                                }
                                                 if (
                                                     input.id === "1" ||
                                                     input.id === "fecha_nombramiento_legado" ||

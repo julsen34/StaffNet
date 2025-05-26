@@ -300,10 +300,18 @@ const HomeView = () => {
 
     const handleChange = useCallback(
         (event, input) => {
-            setInputValues({
-                ...inputValues,
-                [input.name]: event.target.value,
-            });
+            if (input.name === "tipo_contrato" && event.target.value !== "TERMINO FIJO") {
+                setInputValues({
+                    ...inputValues,
+                    [input.name]: event.target.value,
+                    fecha_fin_contrato: "" // Reset fecha_fin_contrato when tipo_contrato changes
+                });
+            } else {
+                setInputValues({
+                    ...inputValues,
+                    [input.name]: event.target.value,
+                });
+            }
         },
         [inputValues]
     );

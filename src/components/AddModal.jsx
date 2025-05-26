@@ -237,8 +237,12 @@ const AddModal = ({ arrayData, openModalAdd, formData, setFormData, setOpenModal
                                         input.name === "fecha_nombramiento" ||
                                         input.name === "fecha_afiliacion_eps" ||
                                         input.name === "barrio" ||
-                                        input.name === "fecha_aplica_teletrabajo"
+                                        input.name === "fecha_aplica_teletrabajo" ||
+                                        input.name === "fecha_fin_contrato"
                                     ) {
+                                        if (input.name === "fecha_fin_contrato" && formData.tipo_contrato !== "TERMINO FIJO") {
+                                            return null;
+                                        }
                                         return (
                                             <TextField
                                                 sx={{

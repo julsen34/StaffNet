@@ -1,0 +1,8 @@
+flask
+flask_session
+datetime
+mysql.connector
+redis
+ldap3
+jwt
+python-dotenv
