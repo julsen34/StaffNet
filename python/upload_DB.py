@@ -71,7 +71,8 @@ info_tables = {
         "tipo_contrato": "Tipo de contrato",
         "fecha_ingreso": "Fecha de ingreso",
         "salario": "Salario",
-        "subsidio_transporte": "Subsidio de transporte",
+        "valor_subsidio": "Valor del subsidio",
+        "tipo_subsidio": "Tipo de subsidio",
         "rodamiento": "Rodamiento",
         "aplica_teletrabajo": "Aplica para teletrabajo",
         "fecha_aplica_teletrabajo": "Fecha de aplicacion de teletrabajo",
@@ -174,7 +175,7 @@ with open(file_path, "r", encoding="utf-8-sig") as csv_file:
                 elif column in [
                     "salario",
                     "tel_fijo",
-                    "subsidio_transporte",
+                    "valor_subsidio",
                     "dias_utilizados",
                     "personas_a_cargo",
                     "hijos",

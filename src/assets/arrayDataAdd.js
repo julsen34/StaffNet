@@ -886,10 +886,20 @@ export const arrayDataAdd = [
                 type: "number",
             },
             {
-                label: "Subsidio de transporte",
-                name: "subsidio_transporte",
+                label: "Valor del subsidio",
+                name: "valor_subsidio",
                 initialValue: "",
                 type: "number",
+            },
+            {
+                label: "Tipo de subsidio",
+                name: "tipo_subsidio",
+                initialValue: "",
+                type: "select",
+                options: [
+                    { value: "TRANSPORTE", label: "Subsidio de transporte" },
+                    { value: "CONECTIVIDAD", label: "Subsidio de conectividad" },
+                ],
             },
             {
                 label: "Aplica para teletrabajo",

@@ -30,8 +30,8 @@ from dotenv import load_dotenv
 from roles import get_rol_tables, get_rol_columns
 from werkzeug.utils import secure_filename
 from PIL import Image
-
-
+import requests
+   
 # Evitar logs innecesarios
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
@@ -162,7 +162,8 @@ def bd_info():
                     "tipo_contrato": clean_value(body.get("tipo_contrato")),
                     "fecha_fin_contrato": clean_value(body.get("fecha_fin_contrato")),
                     "salario": clean_value(body.get("salario")),
-                    "subsidio_transporte": clean_value(body.get("subsidio_transporte")),
+                    "valor_subsidio": clean_value(body.get("valor_subsidio")),
+                    "tipo_subsidio": clean_value(body.get("tipo_subsidio")),
                     "rodamiento": clean_value(body.get("rodamiento")),
                     "aplica_teletrabajo": clean_value(
                         body.get("aplica_teletrabajo", False)
@@ -243,11 +244,15 @@ db_config = {
 }
 
 
-def conexion_mysql():
-    """Get a connection from the connection"""
+def conexion_mysql(use_g=True):
+    """Get a connection from the connection. Si use_g es False, no usa g.connection."""
     try:
-        g.connection = mysql.connector.connect(**db_config)
-        return g.connection
+        if use_g:
+            g.connection = mysql.connector.connect(**db_config)
+            return g.connection
+        else:
+            connection = mysql.connector.connect(**db_config)
+            return connection
     except Exception as e:
         logging.error("Error connecting to MySQL: %s", e)
         raise Exception from e
@@ -602,17 +607,72 @@ def change_state():
     return response
 
 
+SYNC_URL = os.environ.get("SYNC_URL", "")  
+    
 @app.route("/update_transaction", methods=["POST"])
 def update_transaction():
-    """Update the data in the database"""
+    """Update the data in the database y notifica a la API de Django"""
     if session["edit"] == True:
         body = get_request_body()
         info_tables = bd_info()
         conexion = conexion_mysql()
         response = update_data(conexion, info_tables, "cedula = " + str(body["cedula"]))
+        # Solo notificar si la actualización fue exitosa
+        if response.get("status") == "success":
+            cedula = body.get("cedula")
+            if not cedula:
+                return jsonify({"error": "Cedula no enviada"}), 400
+            # Abre una nueva conexión para las consultas adicionales, sin usar g
+            conexion2 = conexion_mysql(use_g=False)
+            cursor = conexion2.cursor()
+            cursor.execute(
+                "SELECT cargo, campana_general, gerencia FROM employment_information WHERE cedula = %s", (cedula,)
+            )
+            result = cursor.fetchone()
+            cargo, campana_general, gerencia = result if result else (None, None, None)
+            cursor.execute(
+                "SELECT correo, correo_corporativo, nombres, apellidos FROM personal_information WHERE cedula = %s", (cedula,)
+            )
+            personal_result = cursor.fetchone()    
+            correo = personal_result[0] if personal_result else None
+            company_email = personal_result[1] if personal_result else None
+            first_name = personal_result[2] if personal_result else None
+            last_name = personal_result[3] if personal_result else None
+            cursor.close()
+            conexion2.close()
+
+            data = {
+            "cedula": cedula,
+            "cargo": cargo,
+            "campana_general": campana_general,
+            "gerencia": gerencia,
+            "correo": correo,
+            "company_email": company_email,
+            "first_name": first_name,
+            "last_name": last_name,
+   }
+            try:
+                sync_response = requests.post(SYNC_URL, json=data, timeout=5)
+                logging.info(f"Respuesta de Django API: status_code={sync_response.status_code}, body={sync_response.text}")
+                if sync_response.status_code == 200:
+                    logging.info(f"Notificado a Django API: {cedula} - {sync_response.json()}")
+                    return jsonify({"status": "success", "django_sync": "ok"}), 200
+                else:
+                    logging.error(f"Error notificando a Django API: {sync_response.status_code} - {sync_response.text}")
+                    return jsonify({
+                        "status": "success",
+                        "django_sync": "error",
+                        "error": sync_response.text,
+                        "status_code": sync_response.status_code
+                    }), 207
+            except Exception as e:
+                logging.error(f"Error notificando a Django API: {e}")
+                return jsonify({"status": "success", "django_sync": "error", "error": str(e)}), 207
+        else:
+            return response
     else:
         response = {"status": "False", "error": "No tienes permisos"}
-    return response
+        return response
 
 
 @app.route("/insert_transaction", methods=["POST"])
@@ -1163,3 +1223,4 @@ def get_personal_information(cedula):
         response = {"status": "success", "data": data}
         return response
     return jsonify(response), 500
+

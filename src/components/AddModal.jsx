@@ -191,7 +191,7 @@ const AddModal = ({ arrayData, openModalAdd, formData, setFormData, setOpenModal
                                     //     return <DirectionField key={input.id} handleFormChange={handleFormChange}></DirectionField>;
                                     // }
 
-                                    if (input.name == "salario" || input.name == "cuenta_nomina" || input.name == "subsidio_transporte" || input.name == "rodamiento" || input.name === "celular") {
+                                    if (input.name == "salario" || input.name == "cuenta_nomina" || input.name == "valor_subsidio" || input.name == "rodamiento" || input.name === "celular") {
                                         return (
                                             <TextField
                                                 inputProps={{ inputMode: "numeric", pattern: "[0-9]*" }}
@@ -233,7 +233,6 @@ const AddModal = ({ arrayData, openModalAdd, formData, setFormData, setOpenModal
                                         input.name === "correo_corporativo" ||
                                         input.name === "estudios_en_curso" ||
                                         input.name === "contacto_emergencia" ||
-                                        input.name === "subsidio_transporte" ||
                                         input.name === "fecha_nombramiento" ||
                                         input.name === "fecha_afiliacion_eps" ||
                                         input.name === "barrio" ||

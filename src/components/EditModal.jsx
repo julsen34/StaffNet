@@ -272,7 +272,7 @@ const EditModal = ({
                                                 if (
                                                     input.name === "salario" ||
                                                     input.name === "cuenta_nomina" ||
-                                                    input.name === "subsidio_transporte" ||
+                                                    input.name === "valor_subsidio" ||
                                                     input.name === "rodamiento" ||
                                                     input.name === "tel_fijo" ||
                                                     input.name === "tel_contacto" ||
