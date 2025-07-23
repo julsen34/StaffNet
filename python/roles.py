@@ -241,8 +241,6 @@ roles = {
             "observaciones": "",
             "usuario_windows": "",
             "rodamiento": "",
-            "valor_subsidio": "",
-            "tipo_subsidio": "",
         },
         "disciplinary_actions": {
             "memorando_1": "",
