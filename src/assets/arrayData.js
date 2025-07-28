@@ -758,6 +758,7 @@ export const arrayData = [
 					{ value: "AGENTE VIDEOLLAMADA Y LENGUAJE DE SEÑAS", label: "Agente Videollamada y Lenguaje de Señas" },
 					{ value: "ANALISTA BACK", label: "Analista Back" },
 					{ value: "ANALISTA BI", label: "Analista BI" },
+					{ value: "ANALISTA COMERCIAL", label: "Analista Comercial" },
 					{ value: "ANALISTA DE APLICACIONES DE CONTACT CENTER", label: "Analista de Aplicaciones de Contact Center" },
 					{ value: "ANALISTA DE BD Y APLICACIONES", label: "Analista de BD y Aplicaciones" },
 					{ value: "ANALISTA DE CALIDAD", label: "Analista de Calidad" },

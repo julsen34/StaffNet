@@ -31,6 +31,7 @@ from roles import get_rol_tables, get_rol_columns
 from werkzeug.utils import secure_filename
 from PIL import Image
 import requests
+from ldap3 import Server, Connection, ALL
    
 # Evitar logs innecesarios
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -679,9 +680,26 @@ def update_transaction():
 def insert_in_tables():
     """Insert the data in the database"""
     info_tables = bd_info()
-    if session["create"] == True:
+    if session.get("create") == True:
         conexion = conexion_mysql()
         response = insert_transaction(conexion, info_tables)
+
+        # Solo intentar crear en AD si la inserción fue exitosa
+        if response.get("status") == "success":
+            personal_info = info_tables.get("personal_information", {})
+            employment_info = info_tables.get("employment_information", {})
+            nombres = personal_info.get("nombres", "")
+            apellidos = personal_info.get("apellidos", "")
+            cargo = employment_info.get("cargo", "")
+            # Separar apellidos en primer y segundo apellido
+            apellidos_split = apellidos.split()
+            apellido1 = apellidos_split[0] if len(apellidos_split) > 0 else ""
+            apellido2 = apellidos_split[1] if len(apellidos_split) > 1 else ""
+            try:
+                ad_username = create_ad_user(nombres, apellido1, apellido2, cargo)
+                response["ad_username"] = ad_username
+            except Exception as e:
+                response["ad_error"] = str(e)
     else:
         response = {"status": "False", "error": "No tienes permisos"}
     return response
@@ -1224,3 +1242,53 @@ def get_personal_information(cedula):
         return response
     return jsonify(response), 500
 
+# =====================
+# Utilidades para Active Directory (LDAP)
+# =====================
+LDAP_SERVER = 'CYCSERVICES.COM'
+LDAP_USER = 'Atenea'
+LDAP_PASSWORD = 'Xy5t3m452025+-'
+LDAP_BASE_DN = 'dc=CYCSERVICES,dc=COM'
+LDAP_DOMAIN = os.environ.get('AD_DOMAIN', 'cycservices.com')
+
+def get_ldap_connection():
+    server = Server(LDAP_SERVER, get_info=ALL)
+    conn = Connection(server, user=LDAP_USER, password=LDAP_PASSWORD, auto_bind=True)
+    return conn
+
+def user_exists(conn, username):
+    conn.search(LDAP_BASE_DN, f"(sAMAccountName={username})", attributes=["sAMAccountName"])
+    return len(conn.entries) > 0
+
+def create_ad_user(nombre, apellido1, apellido2, cargo):
+    conn = get_ldap_connection()
+    # Generar username usando el primer nombre y primer apellido
+    base_username = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
+    username = base_username
+    if user_exists(conn, username):
+        # Añadir la inicial del segundo apellido, si existe
+        if apellido2:
+            username = f"{base_username}.{apellido2[0].lower()}"
+            if user_exists(conn, username):
+                raise Exception("No se pudo generar un username único para AD")
+        else:
+            raise Exception("No se pudo generar un username único para AD")
+            
+    display_name = f"{nombre} {apellido1} {apellido2}".strip()
+    
+    # Construir el DN usando el LDAP_BASE_DN fijo
+    user_dn = f"CN={display_name},{LDAP_BASE_DN}"
+
+    attributes = {
+        "givenName": nombre,
+        "sn": f"{apellido1} {apellido2}".strip(),
+        "displayName": display_name,
+        "title": cargo,
+        "sAMAccountName": username,
+        "userPrincipalName": f"{username}@{LDAP_DOMAIN}",
+        "objectClass": ["top", "person", "organizationalPerson", "user"],
+    }
+    conn.add(user_dn, attributes=attributes)
+    if not conn.result["description"] == "success":
+        raise Exception(f"Error creando usuario en AD: {conn.result}")
+    return username
