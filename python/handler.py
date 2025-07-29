@@ -3,6 +3,8 @@
 import logging
 import re
 import os
+import string
+import random
 import mysql.connector
 import pandas as pd
 from io import BytesIO, StringIO
@@ -1245,50 +1247,113 @@ def get_personal_information(cedula):
 # =====================
 # Utilidades para Active Directory (LDAP)
 # =====================
-LDAP_SERVER = 'CYCSERVICES.COM'
-LDAP_USER = 'Atenea'
-LDAP_PASSWORD = 'Xy5t3m452025+-'
-LDAP_BASE_DN = 'dc=CYCSERVICES,dc=COM'
-LDAP_DOMAIN = os.environ.get('AD_DOMAIN', 'cycservices.com')
+LDAP_SERVER      = 'CYCSERVICES.COM'
+LDAP_USER        = 'Atenea'
+LDAP_PASSWORD    = 'Xy5t3m452025+-'
+LDAP_BASE_DN     = 'dc=CYCSERVICES,dc=COM'
+LDAP_DOMAIN      = os.environ.get('AD_DOMAIN', 'cycservices.com')
+
+# OU padres (asegúrate que existen)
+USERS_OU_PATH    = 'OU=Users'
+GROUPS_OU_PATH   = 'OU=Groups'
 
 def get_ldap_connection():
     server = Server(LDAP_SERVER, get_info=ALL)
-    conn = Connection(server, user=LDAP_USER, password=LDAP_PASSWORD, auto_bind=True)
+    conn   = Connection(server, user=LDAP_USER, password=LDAP_PASSWORD, auto_bind=True)
     return conn
 
 def user_exists(conn, username):
-    conn.search(LDAP_BASE_DN, f"(sAMAccountName={username})", attributes=["sAMAccountName"])
+    conn.search(
+        LDAP_BASE_DN,
+        f"(sAMAccountName={username})",
+        attributes=["sAMAccountName"]
+    )
     return len(conn.entries) > 0
 
-def create_ad_user(nombre, apellido1, apellido2, cargo):
-    conn = get_ldap_connection()
-    # Generar username usando el primer nombre y primer apellido
-    base_username = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
-    username = base_username
-    if user_exists(conn, username):
-        # Añadir la inicial del segundo apellido, si existe
-        if apellido2:
-            username = f"{base_username}.{apellido2[0].lower()}"
-            if user_exists(conn, username):
-                raise Exception("No se pudo generar un username único para AD")
-        else:
-            raise Exception("No se pudo generar un username único para AD")
-            
-    display_name = f"{nombre} {apellido1} {apellido2}".strip()
-    
-    # Construir el DN usando el LDAP_BASE_DN fijo
-    user_dn = f"CN={display_name},{LDAP_BASE_DN}"
+def _generate_password(length=12):
+    """Genera una contraseña con mayúsculas, minúsculas y dígitos."""
+    parts = [
+        random.choice(string.ascii_uppercase),
+        random.choice(string.ascii_lowercase),
+        random.choice(string.digits),
+    ]
+    parts += random.choices(string.ascii_letters + string.digits, k=length-3)
+    return "".join(random.sample(parts, len(parts)))
 
-    attributes = {
-        "givenName": nombre,
-        "sn": f"{apellido1} {apellido2}".strip(),
-        "displayName": display_name,
-        "title": cargo,
-        "sAMAccountName": username,
-        "userPrincipalName": f"{username}@{LDAP_DOMAIN}",
-        "objectClass": ["top", "person", "organizationalPerson", "user"],
+def create_ad_user(nombre: str,
+                   apellido1: str,
+                   apellido2: str,
+                   cargo: str,
+                   city: str,
+                   campaign: str) -> dict:
+    """
+    Crea un usuario en AD bajo:
+      OU=<campaign>,OU=<city>,OU=Users,dc=...
+    Lo habilita, le asigna contraseña y lo agrega al grupo de campaña.
+    Devuelve un dict con username, password, dn y campaign_group_dn.
+    """
+    conn = get_ldap_connection()
+
+    # 1) Generar sAMAccountName único
+    base = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
+    username = base
+    if user_exists(conn, username):
+        if apellido2:
+            username = f"{base}.{apellido2[0].lower()}"
+            if user_exists(conn, username):
+                raise Exception("No se pudo generar un sAMAccountName único")
+        else:
+            raise Exception("No se pudo generar un sAMAccountName único")
+
+    display_name   = f"{nombre} {apellido1} {apellido2}".strip()
+    user_principal = f"{username}@{LDAP_DOMAIN}"
+    password       = _generate_password()
+
+    # 2) Construir el DN con OU de ciudad y campaña
+    #    Ejemplo: CN=Juan Perez,OU=CampañaA,OU=Bogota,OU=Users,dc=cycservices,dc=com
+    user_dn = (
+        f"CN={display_name},"
+        f"OU={campaign},"
+        f"OU={city},"
+        f"{USERS_OU_PATH},"
+        f"{LDAP_BASE_DN}"
+    )
+
+    # 3) Atributos y creación
+    attrs = {
+        'objectClass':             ['top', 'person', 'organizationalPerson', 'user'],
+        'givenName':               nombre,
+        'sn':                      f"{apellido1} {apellido2}".strip(),
+        'displayName':             display_name,
+        'title':                   cargo,
+        'sAMAccountName':          username,
+        'userPrincipalName':       user_principal,
+        'unicodePwd':              f'"{password}"'.encode('utf-16-le'),
+        'userAccountControl':      512,  # NORMAL_ACCOUNT
+        'physicalDeliveryOfficeName': city,
+        'department':                campaign,
     }
-    conn.add(user_dn, attributes=attributes)
-    if not conn.result["description"] == "success":
-        raise Exception(f"Error creando usuario en AD: {conn.result}")
-    return username
+    conn.add(user_dn, attributes=attrs)
+    if conn.result['description'] != 'success':
+        raise Exception(f"Error creando usuario: {conn.result}")
+
+    # 4) Agregar al grupo de campaña (suponemos CN=Campaña_<campaign> en OU=Groups)
+    campaign_group_dn = (
+        f"CN=Campaña_{campaign},"
+        f"{GROUPS_OU_PATH},"
+        f"{LDAP_BASE_DN}"
+    )
+    conn.modify(
+        campaign_group_dn,
+        {'member': [(MODIFY_ADD, [user_dn])]}
+    )
+    if conn.result['description'] != 'success':
+        raise Exception(f"Error añadiendo al grupo: {conn.result}")
+
+    conn.unbind()
+    return {
+        'username':       username,
+        'password':       password,
+        'distinguishedName': user_dn,
+        'campaign_group_dn': campaign_group_dn
+    }
