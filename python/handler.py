@@ -33,7 +33,7 @@ from roles import get_rol_tables, get_rol_columns
 from werkzeug.utils import secure_filename
 from PIL import Image
 import requests
-from ldap3 import Server, Connection, ALL
+from ldap3 import Server, Connection, ALL, MODIFY_ADD
    
 # Evitar logs innecesarios
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -680,28 +680,41 @@ def update_transaction():
 
 @app.route("/insert_transaction", methods=["POST"])
 def insert_in_tables():
-    """Insert the data in the database"""
-    info_tables = bd_info()
+    info_tables = bd_info() or {}
     if session.get("create") == True:
         conexion = conexion_mysql()
         response = insert_transaction(conexion, info_tables)
 
-        # Solo intentar crear en AD si la inserción fue exitosa
+        # Solo si inserción SQL exitosa
         if response.get("status") == "success":
-            personal_info = info_tables.get("personal_information", {})
+            personal_info   = info_tables.get("personal_information", {})
             employment_info = info_tables.get("employment_information", {})
             nombres = personal_info.get("nombres", "")
             apellidos = personal_info.get("apellidos", "")
-            cargo = employment_info.get("cargo", "")
-            # Separar apellidos en primer y segundo apellido
-            apellidos_split = apellidos.split()
-            apellido1 = apellidos_split[0] if len(apellidos_split) > 0 else ""
-            apellido2 = apellidos_split[1] if len(apellidos_split) > 1 else ""
-            try:
-                ad_username = create_ad_user(nombres, apellido1, apellido2, cargo)
-                response["ad_username"] = ad_username
-            except Exception as e:
-                response["ad_error"] = str(e)
+            cargo     = employment_info.get("cargo", "")
+            campana   = employment_info.get("campana_general")
+
+            # Validar campaña
+            if not campana:
+                response = {"status": "error", "ad_error": "'campana_general' es obligatorio"}
+            else:
+                parts    = apellidos.split()
+                apellido1 = parts[0] if len(parts) > 0 else ""
+                apellido2 = parts[1] if len(parts) > 1 else ""
+                try:
+                    ad_info = create_ad_user(
+                        nombre=    nombres,
+                        apellido1= apellido1,
+                        apellido2= apellido2,
+                        cargo=     cargo,
+                        city="BOGOTA",
+                        campaign=  campana
+                    )
+                    response["ad_username"] = ad_info["username"]
+                    response["ad_password"] = ad_info["password"]
+                    response["ad_dn"]       = ad_info["distinguishedName"]
+                except Exception as e:
+                    response["ad_error"] = str(e)
     else:
         response = {"status": "False", "error": "No tienes permisos"}
     return response
@@ -1245,22 +1258,22 @@ def get_personal_information(cedula):
     return jsonify(response), 500
 
 # =====================
-# Utilidades para Active Directory (LDAP)
+# Utilidades para Active Directory (LDAP) (embed dentro del handler)
 # =====================
-LDAP_SERVER      = 'CYCSERVICES.COM'
-LDAP_USER        = 'Atenea'
-LDAP_PASSWORD    = 'Xy5t3m452025+-'
-LDAP_BASE_DN     = 'dc=CYCSERVICES,dc=COM'
-LDAP_DOMAIN      = os.environ.get('AD_DOMAIN', 'cycservices.com')
+LDAP_SERVER    = 'CYCSERVICES.COM'
+LDAP_USER      = 'Atenea'
+LDAP_PASSWORD  = 'Xy5t3m452025+-'
+LDAP_BASE_DN   = 'dc=CYCSERVICES,dc=COM'
+LDAP_DOMAIN    = os.environ.get('AD_DOMAIN', 'cycservices.com')
+USERS_OU_PATH  = 'OU=Users'
+GROUPS_OU_PATH = 'OU=Groups'
 
-# OU padres (asegúrate que existen)
-USERS_OU_PATH    = 'OU=Users'
-GROUPS_OU_PATH   = 'OU=Groups'
 
 def get_ldap_connection():
     server = Server(LDAP_SERVER, get_info=ALL)
     conn   = Connection(server, user=LDAP_USER, password=LDAP_PASSWORD, auto_bind=True)
     return conn
+
 
 def user_exists(conn, username):
     conn.search(
@@ -1270,8 +1283,8 @@ def user_exists(conn, username):
     )
     return len(conn.entries) > 0
 
+
 def _generate_password(length=12):
-    """Genera una contraseña con mayúsculas, minúsculas y dígitos."""
     parts = [
         random.choice(string.ascii_uppercase),
         random.choice(string.ascii_lowercase),
@@ -1280,22 +1293,22 @@ def _generate_password(length=12):
     parts += random.choices(string.ascii_letters + string.digits, k=length-3)
     return "".join(random.sample(parts, len(parts)))
 
-def create_ad_user(nombre: str,
-                   apellido1: str,
-                   apellido2: str,
-                   cargo: str,
-                   city: str,
-                   campaign: str) -> dict:
+
+def create_ad_user(
+    nombre: str,
+    apellido1: str,
+    apellido2: str,
+    cargo: str,
+    city: str,
+    campaign: str
+) -> dict:
     """
-    Crea un usuario en AD bajo:
-      OU=<campaign>,OU=<city>,OU=Users,dc=...
-    Lo habilita, le asigna contraseña y lo agrega al grupo de campaña.
-    Devuelve un dict con username, password, dn y campaign_group_dn.
+    Crea un usuario en AD bajo OU=<campaign>,OU=<city>,OU=Users,...
     """
     conn = get_ldap_connection()
 
     # 1) Generar sAMAccountName único
-    base = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
+    base     = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
     username = base
     if user_exists(conn, username):
         if apellido2:
@@ -1309,27 +1322,20 @@ def create_ad_user(nombre: str,
     user_principal = f"{username}@{LDAP_DOMAIN}"
     password       = _generate_password()
 
-    # 2) Construir el DN con OU de ciudad y campaña
-    #    Ejemplo: CN=Juan Perez,OU=CampañaA,OU=Bogota,OU=Users,dc=cycservices,dc=com
-    user_dn = (
-        f"CN={display_name},"
-        f"OU={campaign},"
-        f"OU={city},"
-        f"{USERS_OU_PATH},"
-        f"{LDAP_BASE_DN}"
-    )
+    # 2) Construir el DN con OU en dominio/<city>/<campaign>
+    user_dn = f"CN={display_name},OU='TECNOLOGIA',OU={city},{USERS_OU_PATH},{LDAP_BASE_DN}"
 
     # 3) Atributos y creación
     attrs = {
-        'objectClass':             ['top', 'person', 'organizationalPerson', 'user'],
-        'givenName':               nombre,
-        'sn':                      f"{apellido1} {apellido2}".strip(),
-        'displayName':             display_name,
-        'title':                   cargo,
-        'sAMAccountName':          username,
-        'userPrincipalName':       user_principal,
-        'unicodePwd':              f'"{password}"'.encode('utf-16-le'),
-        'userAccountControl':      512,  # NORMAL_ACCOUNT
+        'objectClass':               ['top', 'person', 'organizationalPerson', 'user'],
+        'givenName':                 nombre,
+        'sn':                        f"{apellido1} {apellido2}".strip(),
+        'displayName':               display_name,
+        'title':                     cargo,
+        'sAMAccountName':            username,
+        'userPrincipalName':         user_principal,
+        'unicodePwd':                f'"{password}"'.encode('utf-16-le'),
+        'userAccountControl':        512,
         'physicalDeliveryOfficeName': city,
         'department':                campaign,
     }
@@ -1337,12 +1343,8 @@ def create_ad_user(nombre: str,
     if conn.result['description'] != 'success':
         raise Exception(f"Error creando usuario: {conn.result}")
 
-    # 4) Agregar al grupo de campaña (suponemos CN=Campaña_<campaign> en OU=Groups)
-    campaign_group_dn = (
-        f"CN=Campaña_{campaign},"
-        f"{GROUPS_OU_PATH},"
-        f"{LDAP_BASE_DN}"
-    )
+    # 4) Agregar al grupo de campaña bajo dominio/<city>/<campaign>
+    campaign_group_dn = f"CN=Campaña_{campaign},OU={campaign},OU={city},{GROUPS_OU_PATH},{LDAP_BASE_DN}"
     conn.modify(
         campaign_group_dn,
         {'member': [(MODIFY_ADD, [user_dn])]}
@@ -1352,8 +1354,8 @@ def create_ad_user(nombre: str,
 
     conn.unbind()
     return {
-        'username':       username,
-        'password':       password,
-        'distinguishedName': user_dn,
-        'campaign_group_dn': campaign_group_dn
+        'username':           username,
+        'password':           password,
+        'distinguishedName':  user_dn,
+        'campaign_group_dn':  campaign_group_dn
     }
