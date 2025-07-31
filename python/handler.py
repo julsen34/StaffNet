@@ -680,11 +680,11 @@ def update_transaction():
 
 @app.route("/insert_transaction", methods=["POST"])
 def insert_in_tables():
-    info_tables = bd_info() or {}
-    if session.get("create") == True:
+    """Insert the data in the database y crea usuario en AD si aplica"""
+    info_tables = bd_info()
+    if session["create"] == True:
         conexion = conexion_mysql()
         response = insert_transaction(conexion, info_tables)
-
         # Solo si inserción SQL exitosa
         if response.get("status") == "success":
             personal_info   = info_tables.get("personal_information", {})
@@ -693,31 +693,31 @@ def insert_in_tables():
             apellidos = personal_info.get("apellidos", "")
             cargo     = employment_info.get("cargo", "")
             campana   = employment_info.get("campana_general")
-
-            # Validar campaña
-            if not campana:
-                response = {"status": "error", "ad_error": "'campana_general' es obligatorio"}
-            else:
-                parts    = apellidos.split()
-                apellido1 = parts[0] if len(parts) > 0 else ""
-                apellido2 = parts[1] if len(parts) > 1 else ""
+            # Lógica para crear usuario en AD solo si hay datos mínimos
+            if nombres and apellidos and cargo and campana:
                 try:
-                    ad_info = create_ad_user(
-                        nombre=    nombres,
-                        apellido1= apellido1,
-                        apellido2= apellido2,
-                        cargo=     cargo,
-                        city="BOGOTA",
-                        campaign=  campana
+                    # Separa apellidos si es necesario
+                    apellidos_split = apellidos.split(" ", 1)
+                    apellido1 = apellidos_split[0]
+                    apellido2 = apellidos_split[1] if len(apellidos_split) > 1 else ""
+                    ad_result = create_ad_user(
+                        nombre=nombres,
+                        apellido1=apellido1,
+                        apellido2=apellido2,
+                        cargo=cargo,
+                        city=employment_info.get("sede", "Bogota"),
+                        campaign=campana
                     )
-                    response["ad_username"] = ad_info["username"]
-                    response["ad_password"] = ad_info["password"]
-                    response["ad_dn"]       = ad_info["distinguishedName"]
+                    logging.info(f"Usuario creado en AD: {ad_result}")
+                    response["ad_status"] = "success"
+                    response["ad_user"] = ad_result["username"]
                 except Exception as e:
+                    logging.error(f"Error creando usuario en AD: {e}", exc_info=True)
+                    response["ad_status"] = "error"
                     response["ad_error"] = str(e)
+        return jsonify(response)
     else:
-        response = {"status": "False", "error": "No tienes permisos"}
-    return response
+        return jsonify({"status": "False", "error": "No tienes permisos"})
 
 
 @app.route("/favicon.ico")
@@ -1182,85 +1182,10 @@ def massive_update():
     else:
         return jsonify({"status": "False", "error": "No tienes permisos"}), 403
 
-
-# Patch for just one table
-@app.route("/update", methods=["PATCH"])
-def patch_update():
-    """Update the data in the database"""
-    logging.info(session.items())
-    logging.info(session["edit"])
-    if "edit" in session and session["edit"] == True:
-        body = get_request_body()
-        conexion = conexion_mysql()
-        # Convert from a list to a tuple
-        if not "value" in body and "column" in body:
-            return (
-                jsonify(
-                    {
-                        "status": "False",
-                        "error": "No se enviaron los campos necesarios para la actualización",
-                    }
-                ),
-                400,
-            )
-        params = tuple(body["value"] + [body["cedula"]])
-        logging.info(params)
-        logging.info(body["value"])
-        columns = tuple(body["column"])
-        response = update(
-            body["table"],
-            columns,
-            params,
-            "WHERE cedula = %s",
-            conexion,
-        )
-        if response["status"] == "True":
-            return jsonify(response)
-        elif (
-            response["status"] == "False"
-            and response["error"] == "No se encontró ningún cambio."
-        ):
-            return jsonify(response), 400
-        else:
-            return jsonify(response), 500
-    else:
-        return jsonify({"status": "False", "error": "No tienes permisos"}), 403
-
-
-@app.route("/personal-information/<cedula>", methods=["GET"])
-def get_personal_information(cedula):
-    """Get the personal information of the user"""
-    if not ("consult" in session and session["consult"]):
-        return jsonify({"status": "False", "error": "No tienes permisos"}), 403
-    conexion = conexion_mysql()
-    columns = [
-        "estado_civil",
-        "hijos",
-        "personas_a_cargo",
-        "tel_fijo",
-        "celular",
-        "correo",
-        "contacto_emergencia",
-        "parentesco",
-        "tel_contacto",
-    ]
-    response = search(
-        columns,
-        "personal_information",
-        "WHERE cedula = %s",
-        (cedula,),
-        conexion,
-    )
-    if response["status"] == "success":
-        data = {columns[i]: info for i, info in enumerate(response["info"][0])}
-        response = {"status": "success", "data": data}
-        return response
-    return jsonify(response), 500
-
 # =====================
 # Utilidades para Active Directory (LDAP) (embed dentro del handler)
 # =====================
-LDAP_SERVER    = 'CYCSERVICES.COM'
+LDAP_SERVER    = 'DC.CYCSERVICES-BPO.COM'
 LDAP_USER      = 'Atenea'
 LDAP_PASSWORD  = 'Xy5t3m452025+-'
 LDAP_BASE_DN   = 'dc=CYCSERVICES,dc=COM'
@@ -1268,94 +1193,131 @@ LDAP_DOMAIN    = os.environ.get('AD_DOMAIN', 'cycservices.com')
 USERS_OU_PATH  = 'OU=Users'
 GROUPS_OU_PATH = 'OU=Groups'
 
+from ldap3 import Server, Connection, ALL, MODIFY_ADD
 
 def get_ldap_connection():
-    server = Server(LDAP_SERVER, get_info=ALL)
-    conn   = Connection(server, user=LDAP_USER, password=LDAP_PASSWORD, auto_bind=True)
-    return conn
-
+    logging.info(f"Conectando al servidor LDAP: {LDAP_SERVER} con usuario {LDAP_USER}")
+    try:
+        server = Server(
+            LDAP_SERVER,
+            port=389,
+            use_ssl=False,
+            get_info=ALL,
+            connect_timeout=10
+        )
+        connection = Connection(
+            server,
+            user=LDAP_USER,
+            password=LDAP_PASSWORD,
+            auto_bind=True,
+            auto_referrals=False,
+            receive_timeout=20
+        )
+        logging.info("Conexión LDAP establecida exitosamente.")
+        return connection
+    except Exception as e:
+        logging.error(f"Error al conectar con LDAP: {e}", exc_info=True)
+        raise Exception(f"LDAP connection failed: {e}")
 
 def user_exists(conn, username):
-    conn.search(
-        LDAP_BASE_DN,
-        f"(sAMAccountName={username})",
-        attributes=["sAMAccountName"]
-    )
-    return len(conn.entries) > 0
-
+    logging.info(f"Verificando existencia de usuario en LDAP: {username}")
+    try:
+        conn.search(LDAP_BASE_DN, f"(sAMAccountName={username})", attributes=["sAMAccountName"])
+        exists = bool(conn.entries)
+        logging.info(f"El usuario {'existe' if exists else 'no existe'} en LDAP.")
+        return exists
+    except Exception as e:
+        logging.error(f"Error al buscar usuario en LDAP: {e}", exc_info=True)
+        raise
 
 def _generate_password(length=12):
+    import random, string
+    logging.info("Generando contraseña para usuario LDAP.")
     parts = [
         random.choice(string.ascii_uppercase),
         random.choice(string.ascii_lowercase),
-        random.choice(string.digits),
+        random.choice(string.digits)
     ]
     parts += random.choices(string.ascii_letters + string.digits, k=length-3)
-    return "".join(random.sample(parts, len(parts)))
-
+    random.shuffle(parts)
+    password = ''.join(parts)
+    logging.info("Contraseña generada exitosamente.")
+    return password
 
 def create_ad_user(
     nombre: str,
     apellido1: str,
     apellido2: str,
     cargo: str,
-    city: str,
-    campaign: str
+    city: str = 'Bogota',
+    campaign: str = 'TECNOLOGIA'
 ) -> dict:
-    """
-    Crea un usuario en AD bajo OU=<campaign>,OU=<city>,OU=Users,...
-    """
+    logging.info(f"Iniciando creación de usuario en LDAP para: {nombre} {apellido1} {apellido2}")
     conn = get_ldap_connection()
 
-    # 1) Generar sAMAccountName único
-    base     = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
+    base = f"{nombre.split()[0].lower()}.{apellido1.split()[0].lower()}"
     username = base
+    logging.info(f"Generado sAMAccountName base: {username}")
+
     if user_exists(conn, username):
+        logging.info(f"El usuario {username} ya existe, intentando variante con apellido2.")
         if apellido2:
             username = f"{base}.{apellido2[0].lower()}"
-            if user_exists(conn, username):
-                raise Exception("No se pudo generar un sAMAccountName único")
-        else:
-            raise Exception("No se pudo generar un sAMAccountName único")
+            logging.info(f"Nuevo sAMAccountName propuesto: {username}")
+        if user_exists(conn, username):
+            error_msg = "No se pudo generar un sAMAccountName único"
+            logging.error(error_msg)
+            raise Exception(error_msg)
 
-    display_name   = f"{nombre} {apellido1} {apellido2}".strip()
+    display_name = ' '.join(filter(None, [nombre, apellido1, apellido2]))
     user_principal = f"{username}@{LDAP_DOMAIN}"
-    password       = _generate_password()
+    password = _generate_password()
+    logging.info(f"Creando usuario LDAP con displayName: {display_name} y sAMAccountName: {username}")
 
-    # 2) Construir el DN con OU en dominio/<city>/<campaign>
-    user_dn = f"CN={display_name},OU='TECNOLOGIA',OU={city},{USERS_OU_PATH},{LDAP_BASE_DN}"
-
-    # 3) Atributos y creación
+    user_dn = (
+        f"CN={display_name},"
+        f"OU={city},"
+        f"OU={campaign},"
+        f"{USERS_OU_PATH},"
+        f"{LDAP_BASE_DN}"
+    )
     attrs = {
-        'objectClass':               ['top', 'person', 'organizationalPerson', 'user'],
-        'givenName':                 nombre,
-        'sn':                        f"{apellido1} {apellido2}".strip(),
-        'displayName':               display_name,
-        'title':                     cargo,
-        'sAMAccountName':            username,
-        'userPrincipalName':         user_principal,
-        'unicodePwd':                f'"{password}"'.encode('utf-16-le'),
-        'userAccountControl':        512,
+        'objectClass': ['top','person','organizationalPerson','user'],
+        'givenName': nombre,
+        'sn': f"{apellido1} {apellido2}".strip(),
+        'displayName': display_name,
+        'title': cargo,
+        'sAMAccountName': username,
+        'userPrincipalName': user_principal,
+        'unicodePwd': f'"{password}"'.encode('utf-16-le'),
+        'userAccountControl': 512,
         'physicalDeliveryOfficeName': city,
-        'department':                campaign,
+        'department': campaign,
     }
+    logging.info(f"Intentando agregar usuario LDAP: {user_dn} con atributos: {attrs}")
     conn.add(user_dn, attributes=attrs)
     if conn.result['description'] != 'success':
-        raise Exception(f"Error creando usuario: {conn.result}")
+        error_msg = f"Error creando usuario en AD: {conn.result}"
+        logging.error(error_msg)
+        raise Exception(error_msg)
+    logging.info("Usuario creado en LDAP exitosamente.")
 
-    # 4) Agregar al grupo de campaña bajo dominio/<city>/<campaign>
-    campaign_group_dn = f"CN=Campaña_{campaign},OU={campaign},OU={city},{GROUPS_OU_PATH},{LDAP_BASE_DN}"
-    conn.modify(
-        campaign_group_dn,
-        {'member': [(MODIFY_ADD, [user_dn])]}
+    campaign_group_dn = (
+        f"CN=Campaña_{campaign},OU={city},OU={campaign},{GROUPS_OU_PATH},{LDAP_BASE_DN}"
     )
+    logging.info(f"Añadiendo usuario al grupo LDAP: {campaign_group_dn}")
+    conn.modify(campaign_group_dn, {'member': [(MODIFY_ADD, [user_dn])]})
     if conn.result['description'] != 'success':
-        raise Exception(f"Error añadiendo al grupo: {conn.result}")
+        error_msg = f"Error añadiendo al grupo en AD: {conn.result}"
+        logging.error(error_msg)
+        raise Exception(error_msg)
+    logging.info("Usuario añadido al grupo LDAP exitosamente.")
 
     conn.unbind()
+    logging.info("Conexión LDAP cerrada.")
     return {
-        'username':           username,
-        'password':           password,
-        'distinguishedName':  user_dn,
-        'campaign_group_dn':  campaign_group_dn
+        'username': username,
+        'password': password,
+        'distinguishedName': user_dn,
+        'campaign_group_dn': campaign_group_dn
     }
