@@ -705,7 +705,7 @@ def insert_in_tables():
                         apellido1=apellido1,
                         apellido2=apellido2,
                         cargo=cargo,
-                        city=employment_info.get("sede", "Bogota"),
+                        city=employment_info.get("BOGOTA"),
                         campaign=campana
                     )
                     logging.info(f"Usuario creado en AD: {ad_result}")
@@ -1182,18 +1182,15 @@ def massive_update():
     else:
         return jsonify({"status": "False", "error": "No tienes permisos"}), 403
 
+
 # =====================
 # Utilidades para Active Directory (LDAP) (embed dentro del handler)
 # =====================
-LDAP_SERVER    = 'DC.CYCSERVICES-BPO.COM'
+LDAP_SERVER    = 'dc.CYCSERVICES-BPO.COM'
 LDAP_USER      = 'Atenea'
-LDAP_PASSWORD  = 'Xy5t3m452025+-'
-LDAP_BASE_DN   = 'dc=CYCSERVICES,dc=COM'
-LDAP_DOMAIN    = os.environ.get('AD_DOMAIN', 'cycservices.com')
-USERS_OU_PATH  = 'OU=Users'
-GROUPS_OU_PATH = 'OU=Groups'
-
-from ldap3 import Server, Connection, ALL, MODIFY_ADD
+LDAP_PASSWORD  = os.environ.get('LDAP_PASSWORD', '')
+LDAP_BASE_DN   = 'dc=CYCSERVICES-BPO,dc=COM'
+LDAP_DOMAIN    = os.environ.get('AD_DOMAIN', 'cycservices-bpo.com')
 
 def get_ldap_connection():
     logging.info(f"Conectando al servidor LDAP: {LDAP_SERVER} con usuario {LDAP_USER}")
@@ -1217,7 +1214,7 @@ def get_ldap_connection():
         return connection
     except Exception as e:
         logging.error(f"Error al conectar con LDAP: {e}", exc_info=True)
-        raise Exception(f"LDAP connection failed: {e}")
+        raise
 
 def user_exists(conn, username):
     logging.info(f"Verificando existencia de usuario en LDAP: {username}")
@@ -1249,9 +1246,15 @@ def create_ad_user(
     apellido1: str,
     apellido2: str,
     cargo: str,
-    city: str = 'Bogota',
-    campaign: str = 'TECNOLOGIA'
+    city: str = "BOGOTA",
+    campaign: str = "TECNOLOGIA"
 ) -> dict:
+    # Forzar valor fijo para city
+    city = "BOGOTA"
+
+    if not all([nombre, apellido1, cargo, campaign]):
+        raise ValueError("Faltan datos obligatorios para crear el usuario en AD.")
+
     logging.info(f"Iniciando creación de usuario en LDAP para: {nombre} {apellido1} {apellido2}")
     conn = get_ldap_connection()
 
@@ -1276,11 +1279,11 @@ def create_ad_user(
 
     user_dn = (
         f"CN={display_name},"
-        f"OU={city},"
         f"OU={campaign},"
-        f"{USERS_OU_PATH},"
+        f"OU={city},"
         f"{LDAP_BASE_DN}"
     )
+
     attrs = {
         'objectClass': ['top','person','organizationalPerson','user'],
         'givenName': nombre,
@@ -1291,9 +1294,13 @@ def create_ad_user(
         'userPrincipalName': user_principal,
         'unicodePwd': f'"{password}"'.encode('utf-16-le'),
         'userAccountControl': 512,
-        'physicalDeliveryOfficeName': city,
-        'department': campaign,
     }
+
+    if city:
+        attrs['physicalDeliveryOfficeName'] = city
+    if campaign:
+        attrs['department'] = campaign
+
     logging.info(f"Intentando agregar usuario LDAP: {user_dn} con atributos: {attrs}")
     conn.add(user_dn, attributes=attrs)
     if conn.result['description'] != 'success':
@@ -1303,7 +1310,9 @@ def create_ad_user(
     logging.info("Usuario creado en LDAP exitosamente.")
 
     campaign_group_dn = (
-        f"CN=Campaña_{campaign},OU={city},OU={campaign},{GROUPS_OU_PATH},{LDAP_BASE_DN}"
+        f"OU={campaign},"
+        f"OU={city},"
+        f"{LDAP_BASE_DN}"
     )
     logging.info(f"Añadiendo usuario al grupo LDAP: {campaign_group_dn}")
     conn.modify(campaign_group_dn, {'member': [(MODIFY_ADD, [user_dn])]})
